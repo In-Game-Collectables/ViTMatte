@@ -23,6 +23,9 @@ from torchvision.transforms import functional as F
 from detectron2.engine import default_argument_parser
 from detectron2.config import LazyConfig, instantiate
 from detectron2.checkpoint import DetectionCheckpointer
+import numpy as np
+import cv2
+import torch
 
 def infer_one_image(model, input, save_dir=None):
     """
@@ -34,9 +37,8 @@ def infer_one_image(model, input, save_dir=None):
     """
     output = model(input)['phas'].flatten(0, 2)
     output = F.to_pil_image(output)
-    output.save(opj(save_dir))
-
-    return None
+    
+    return output
 
 def init_model(model, checkpoint, device):
     """
@@ -72,9 +74,9 @@ def get_data(image_dir, trimap_dir):
         image_dir: the directory of the image
         trimap_dir: the directory of the trimap
     """
-    image = Image.open(image_dir).convert('RGB')
+    image = Image.open(image_dir).convert('RGB').resize((1024,1024))
     image = F.to_tensor(image).unsqueeze(0)
-    trimap = Image.open(trimap_dir).convert('L')
+    trimap = Image.open(trimap_dir).convert('L').resize((1024,1024))
     trimap = F.to_tensor(trimap).unsqueeze(0)
 
     return {
@@ -82,13 +84,36 @@ def get_data(image_dir, trimap_dir):
         'trimap': trimap
     }
 
+def generate_checkerboard_image(height, width, num_squares):
+    num_squares_h = num_squares
+    square_size_h = height // num_squares_h
+    square_size_w = square_size_h
+    num_squares_w = width // square_size_w
+    
+
+    new_height = num_squares_h * square_size_h
+    new_width = num_squares_w * square_size_w
+    image = np.zeros((new_height, new_width), dtype=np.uint8)
+
+    for i in range(num_squares_h):
+        for j in range(num_squares_w):
+            start_x = j * square_size_w
+            start_y = i * square_size_h
+            color = 255 if (i + j) % 2 == 0 else 200
+            image[start_y:start_y + square_size_h, start_x:start_x + square_size_w] = color
+
+    image = cv2.resize(image, (width, height))
+    image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+
+    return image
+
 if __name__ == '__main__':
     #add argument we need:
     parser = default_argument_parser()
     parser.add_argument('--model', type=str, default='vitmatte-s')
-    parser.add_argument('--checkpoint-dir', type=str, default='path/to/checkpoint')
-    parser.add_argument('--image-dir', type=str, default='demo/retriever_rgb.png')
-    parser.add_argument('--trimap-dir', type=str, default='demo/retriever_trimap.png')
+    parser.add_argument('--checkpoint-dir', type=str, default='pretrained/ViTMatte_S_Com.pth')
+    parser.add_argument('--image-dir', type=str, default='demo/bulb_rgb.png')
+    parser.add_argument('--trimap-dir', type=str, default='demo/bulb_trimap.png')
     parser.add_argument('--output-dir', type=str, default='demo/result.png')
     parser.add_argument('--device', type=str, default='cuda')
 
@@ -100,3 +125,13 @@ if __name__ == '__main__':
     print('Model initialized. Start inferencing...')
     alpha = infer_one_image(model, input, args.output_dir)
     print('Inferencing finished.')
+    
+    input_x = Image.open(args.image_dir)
+    
+    # Resize alpha mask to fit input image
+    alpha = alpha.resize(input_x.size)
+    foreground_alpha = input_x.copy()
+    # Put the alpha onto the image
+    foreground_alpha.putalpha(alpha)
+    # save image to output
+    foreground_alpha.save(args.output_dir)
